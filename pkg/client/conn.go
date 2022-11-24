@@ -1,4 +1,4 @@
-package pkg
+package client
 
 import (
 	"fmt"
@@ -10,7 +10,7 @@ import (
 	"golang.org/x/crypto/ssh/agent"
 )
 
-type conn struct {
+type Conn struct {
 	Host       string
 	Port       int
 	User       string
@@ -24,7 +24,7 @@ type Client struct {
 	useSudo    bool
 }
 
-func (c *conn) Client() (*Client, error) {
+func (c *Conn) Client() (*Client, error) {
 	var auths []ssh.AuthMethod
 	var sshAgent net.Conn
 	keys := []ssh.Signer{}
