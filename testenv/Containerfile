@@ -1,0 +1,21 @@
+# Target host for the acceptance tests: Debian with systemd and an SSH
+# server. Credentials are throwaway: only publish the port on 127.0.0.1.
+#   root/root      direct root access
+#   deploy/deploy  sudo with a password
+FROM docker.io/library/debian:12
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        systemd systemd-sysv openssh-server sudo cron procps \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN echo 'root:root' | chpasswd \
+    && useradd --create-home --shell /bin/bash deploy \
+    && echo 'deploy:deploy' | chpasswd \
+    && echo 'deploy ALL=(ALL) ALL' > /etc/sudoers.d/deploy \
+    && sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin yes/' /etc/ssh/sshd_config \
+    && systemctl enable ssh
+
+EXPOSE 22
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

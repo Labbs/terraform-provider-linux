@@ -1,0 +1,70 @@
+---
+page_title: "linux Provider"
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# linux Provider
+
+{{ .Description | trimspace }}
+
+Everything runs through `/bin/sh` with standard tools (coreutils, `sed`, `systemctl`), so the host needs no agent. GNU and BusyBox userlands are supported.
+
+## Example Usage
+
+{{ tffile "examples/provider/provider.tf" }}
+
+## Modes
+
+* `local`: commands run on the machine running Terraform. Use it when Terraform runs on the host it manages.
+* `ssh`: commands run on a remote host. One connection is opened per provider and shared by all resources, with at most `ssh.max_sessions` commands at the same time. A broken connection is re-established.
+
+`mode` defaults to `ssh` when the `ssh` attribute is set, and to `local` otherwise. Use [provider aliases](https://developer.hashicorp.com/terraform/language/providers/configuration#alias-multiple-provider-configurations) to manage several hosts.
+
+## SSH authentication
+
+The provider tries, in this order, the configured `private_key` (or `private_key_path`), the keys of the SSH agent when `agent` is `true` (the default), then `password`, also used to answer keyboard-interactive prompts.
+
+Host keys are verified against `~/.ssh/known_hosts`, or `known_hosts_file`. Pin a key with `host_key` instead, for instance one produced by the resource that creates the host. `insecure_ignore_host_key` disables the verification: only use it for tests.
+
+## Privileges
+
+With `sudo = true`, every command runs as root through `sudo`. When `sudo` asks for a password, set `sudo_password`: it is sent on the standard input of `sudo`, never on a command line. Hosts whose `sudoers` require a TTY (`Defaults requiretty`) are not supported.
+
+## What destroying a resource does
+
+Resources undo what they did, but never delete what existed before them:
+
+| Resource | On destroy |
+|----------|------------|
+| `linux_file`, `linux_symlink`, `linux_cron_job`, `linux_file_block`, `linux_ssh_authorized_key` | Removed. |
+| `linux_file_line` | Line removed, unless `remove_on_destroy = false`. A line it replaced is not restored. |
+| `linux_directory` | Removed when empty, or with its content when `force_destroy = true`. |
+| `linux_patch` | Patch reverted, unless `revert_on_destroy = false`. |
+| `linux_package`, `linux_user`, `linux_group` | Removed only if the resource created it: an existing package, user or group it adopted is left in place. |
+| `linux_sysctl` | Line removed from the sysctl file; the current value is left. |
+| `linux_systemd_unit` | Left as it is, unless `revert_on_destroy = true`. |
+| `linux_sed`, `linux_hostname` | Left as they are. |
+| `linux_command` | Runs the `delete` script, if any. |
+
+## Environment variables
+
+Unset attributes fall back to environment variables:
+
+| Attribute | Environment variable |
+|-----------|----------------------|
+| `mode` | `LINUX_MODE` |
+| `sudo` | `LINUX_SUDO` |
+| `sudo_password` | `LINUX_SUDO_PASSWORD` |
+| `ssh.host` | `LINUX_SSH_HOST` |
+| `ssh.port` | `LINUX_SSH_PORT` |
+| `ssh.user` | `LINUX_SSH_USER` |
+| `ssh.password` | `LINUX_SSH_PASSWORD` |
+| `ssh.private_key` | `LINUX_SSH_PRIVATE_KEY` |
+| `ssh.private_key_path` | `LINUX_SSH_PRIVATE_KEY_PATH` |
+| `ssh.private_key_passphrase` | `LINUX_SSH_PRIVATE_KEY_PASSPHRASE` |
+| `ssh.host_key` | `LINUX_SSH_HOST_KEY` |
+| `ssh.known_hosts_file` | `LINUX_SSH_KNOWN_HOSTS_FILE` |
+| `ssh.insecure_ignore_host_key` | `LINUX_SSH_INSECURE_IGNORE_HOST_KEY` |
+
+{{ .SchemaMarkdown | trimspace }}
