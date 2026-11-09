@@ -10,6 +10,57 @@ Manages files, packages, users, services and other settings of a Linux host, eit
 
 Everything runs through `/bin/sh` with standard tools (coreutils, `sed`, `systemctl`), so the host needs no agent. GNU and BusyBox userlands are supported.
 
+## Installation
+
+The provider is published on the [Terraform Registry](https://registry.terraform.io/providers/labbs/linux/latest). Declare it in your configuration:
+
+```terraform
+terraform {
+  required_version = ">= 1.5"
+
+  required_providers {
+    linux = {
+      source  = "labbs/linux"
+      version = "~> 1.0"
+    }
+  }
+}
+```
+
+Then run `terraform init` to download it.
+
+### Requirements
+
+| Where | What is needed |
+|-------|----------------|
+| Machine running Terraform | Terraform 1.5 or later, or 1.14 or later to use [actions](https://developer.hashicorp.com/terraform/language/block/action). |
+| Managed host | Linux with `/bin/sh` and standard tools. Nothing has to be installed on it. |
+| Managed host, with `mode = "ssh"` | An SSH server reachable from the machine running Terraform, or through a bastion. |
+| Managed host, with `sudo = true` | `sudo`, without `requiretty`. |
+| Managed host, for `linux_systemd_unit` and `linux_systemctl` | systemd. |
+
+### Check the connection
+
+Add a provider configuration and read the facts of the host:
+
+```terraform
+provider "linux" {
+  ssh = {
+    host        = "10.0.0.10"
+    user        = "deploy"
+    private_key = file("~/.ssh/id_ed25519")
+  }
+}
+
+data "linux_host" "this" {}
+
+output "os" {
+  value = data.linux_host.this.os_pretty_name
+}
+```
+
+Run `terraform apply`: the output shows the distribution of the host. The host key is verified against `~/.ssh/known_hosts`, so the host must be listed there unless you set `host_key`. See [SSH authentication](#ssh-authentication).
+
 ## Example Usage
 
 ```terraform
@@ -44,6 +95,26 @@ provider "linux" {
 * `ssh`: commands run on a remote host. One connection is opened per provider and shared by all resources, with at most `ssh.max_sessions` commands at the same time. A broken connection is re-established.
 
 `mode` defaults to `ssh` when the `ssh` attribute is set, and to `local` otherwise. Use [provider aliases](https://developer.hashicorp.com/terraform/language/providers/configuration#alias-multiple-provider-configurations) to manage several hosts.
+
+## Waiting for a host that has just been started
+
+The provider tries to connect up to 5 times, 10 seconds apart. To manage an instance created in the same apply, which may take longer to boot, raise `connect_max_attempts`. Set it to `1` not to wait:
+
+```terraform
+provider "linux" {
+  ssh = {
+    host     = aws_instance.web.public_ip
+    host_key = var.web_host_key
+
+    connect_max_attempts   = 30
+    connect_retry_interval = "10s"
+  }
+}
+```
+
+Connection refused, timeouts and authentication failures are retried, because a new instance often runs `sshd` before its keys are installed. Invalid local settings and host key verification failures are reported right away. The connection is opened by the first command that needs it, and the same retries apply if it has to be re-established, for instance after a reboot.
+
+An attempt lasts at most `timeout`, so a host that drops packets can take up to `connect_max_attempts` x (`timeout` + `connect_retry_interval`) before the provider gives up. This also applies to the refresh of a plan when the host is down.
 
 ## SSH authentication
 
@@ -108,6 +179,8 @@ Optional:
 
 - `agent` (Boolean) Authenticate with the keys of the SSH agent listening on `SSH_AUTH_SOCK`. Defaults to `true`.
 - `bastion` (Attributes) Jump host used to reach `host`. (see [below for nested schema](#nestedatt--ssh--bastion))
+- `connect_max_attempts` (Number) How many times to try to connect before giving up, to wait for a host that has just been started. Each attempt lasts at most `timeout`. Set it to `1` not to wait. Defaults to `5`.
+- `connect_retry_interval` (String) Pause between two connection attempts, as a Go duration such as `5s` or `1m`. Defaults to `10s`.
 - `host` (String) Host name or IP address. Required. Environment variable: `LINUX_SSH_HOST`.
 - `host_key` (String) Expected public key of the host, in `authorized_keys` format (`ssh-ed25519 AAAA...`). Takes precedence over `known_hosts_file`. Environment variable: `LINUX_SSH_HOST_KEY`.
 - `insecure_ignore_host_key` (Boolean) Accept any host key. This makes the connection vulnerable to interception: use it only for tests. Environment variable: `LINUX_SSH_INSECURE_IGNORE_HOST_KEY`.

@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
@@ -239,6 +240,9 @@ func TestSSHModelConfig(t *testing.T) {
 		Timeout:        types.StringValue("5s"),
 		MaxSessions:    types.Int64Value(3),
 		Bastion:        bastionObj,
+
+		ConnectMaxAttempts:   types.Int64Value(30),
+		ConnectRetryInterval: types.StringValue("10s"),
 	}
 	cfg, maxSessions, err := m.config(context.Background())
 	if err != nil {
@@ -250,12 +254,33 @@ func TestSSHModelConfig(t *testing.T) {
 		t.Errorf("unexpected endpoint %+v", cfg)
 	case !cfg.Agent || !cfg.InsecureIgnoreHostKey || cfg.Timeout.String() != "5s" || maxSessions != 3:
 		t.Errorf("unexpected options %+v, max sessions %d", cfg, maxSessions)
+	case cfg.ConnectMaxAttempts != 30 || cfg.ConnectRetryInterval != 10*time.Second:
+		t.Errorf("unexpected connection retries %+v", cfg)
 	case cfg.KnownHostsFile != filepath.Join(home, "custom_known_hosts"):
 		t.Errorf("known hosts file = %s", cfg.KnownHostsFile)
 	case cfg.Bastion == nil || cfg.Bastion.Host != "bastion.example.com" || cfg.Bastion.Port != 22 || cfg.Bastion.Agent:
 		t.Errorf("unexpected bastion %+v", cfg.Bastion)
 	case !strings.Contains(cfg.Bastion.PrivateKey, "OPENSSH PRIVATE KEY") || cfg.Bastion.KnownHostsFile != cfg.KnownHostsFile:
 		t.Errorf("bastion key or known hosts not set: %+v", cfg.Bastion)
+	}
+}
+
+func TestSSHConnectRetriesDefault(t *testing.T) {
+	m := sshModel{endpointModel: endpointModel{Host: types.StringValue("10.0.0.5")}}
+	cfg, _, err := m.config(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ConnectMaxAttempts != transport.DefaultConnectMaxAttempts {
+		t.Errorf("max attempts = %d", cfg.ConnectMaxAttempts)
+	}
+
+	m.ConnectMaxAttempts = types.Int64Value(1)
+	if cfg, _, err = m.config(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ConnectMaxAttempts != 1 {
+		t.Errorf("max attempts = %d, want the configured value", cfg.ConnectMaxAttempts)
 	}
 }
 
