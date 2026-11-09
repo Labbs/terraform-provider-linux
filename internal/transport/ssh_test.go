@@ -417,3 +417,199 @@ func TestSSHCancel(t *testing.T) {
 		t.Fatalf("cancellation took %s", elapsed)
 	}
 }
+
+// flakyFront is a TCP proxy to target that hangs up on the first failures
+// connections, like a host whose sshd is not ready yet.
+type flakyFront struct {
+	addr     string
+	mu       sync.Mutex
+	attempts int
+}
+
+func startFlakyFront(t *testing.T, target string, failures int) *flakyFront {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	front := &flakyFront{addr: ln.Addr().String()}
+	go func() {
+		for {
+			nc, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			front.mu.Lock()
+			front.attempts++
+			attempt := front.attempts
+			front.mu.Unlock()
+			if attempt <= failures {
+				_ = nc.Close()
+				continue
+			}
+			upstream, err := net.Dial("tcp", target)
+			if err != nil {
+				_ = nc.Close()
+				continue
+			}
+			go func() {
+				defer func() { _ = upstream.Close() }()
+				_, _ = io.Copy(upstream, nc)
+			}()
+			go func() {
+				defer func() { _ = nc.Close() }()
+				_, _ = io.Copy(nc, upstream)
+			}()
+		}
+	}()
+	return front
+}
+
+func (f *flakyFront) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.attempts
+}
+
+func (f *flakyFront) config(t *testing.T) SSHConfig {
+	t.Helper()
+	host, port, err := net.SplitHostPort(f.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return SSHConfig{
+		Host: host, Port: n, User: "test", Password: "pw", InsecureIgnoreHostKey: true,
+		Timeout: 5 * time.Second, ConnectRetryInterval: time.Millisecond,
+	}
+}
+
+func TestSSHWaitsForHost(t *testing.T) {
+	srv := startTestServer(t, "pw", nil)
+	front := startFlakyFront(t, srv.addr, 3)
+	cfg := front.config(t)
+	cfg.ConnectMaxAttempts = 10
+	runner := NewSSH(cfg, 0)
+	t.Cleanup(func() { _ = runner.Close() })
+
+	if _, err := runner.Run(context.Background(), "true", nil); err != nil {
+		t.Fatalf("expected the runner to wait for the host, got %v", err)
+	}
+	if got := front.count(); got != 4 {
+		t.Errorf("connected %d times, want 4", got)
+	}
+}
+
+func TestSSHSingleAttemptWhenUnset(t *testing.T) {
+	srv := startTestServer(t, "pw", nil)
+	front := startFlakyFront(t, srv.addr, 1)
+	runner := NewSSH(front.config(t), 0)
+	t.Cleanup(func() { _ = runner.Close() })
+
+	if _, err := runner.Run(context.Background(), "true", nil); err == nil {
+		t.Fatal("expected a connection error")
+	}
+	if got := front.count(); got != 1 {
+		t.Errorf("connected %d times, want 1", got)
+	}
+}
+
+func TestSSHGivesUp(t *testing.T) {
+	srv := startTestServer(t, "pw", nil)
+	front := startFlakyFront(t, srv.addr, 1000)
+	cfg := front.config(t)
+	cfg.ConnectMaxAttempts = 3
+	runner := NewSSH(cfg, 0)
+	t.Cleanup(func() { _ = runner.Close() })
+
+	_, err := runner.Run(context.Background(), "true", nil)
+	if err == nil || !strings.Contains(err.Error(), "after 3 connection attempts") {
+		t.Fatalf("expected a give up error, got %v", err)
+	}
+	if got := front.count(); got != 3 {
+		t.Errorf("connected %d times, want 3", got)
+	}
+
+	// The next scripts must not wait for the host all over again.
+	if _, err := runner.Run(context.Background(), "true", nil); err == nil {
+		t.Fatal("expected a connection error")
+	}
+	if got := front.count(); got != 3 {
+		t.Errorf("connected %d times after giving up, want 3", got)
+	}
+}
+
+func TestSSHRetriesAuthenticationFailures(t *testing.T) {
+	srv := startTestServer(t, "pw", nil)
+	front := startFlakyFront(t, srv.addr, 0)
+	cfg := front.config(t)
+	cfg.Password = "not yet installed"
+	cfg.ConnectMaxAttempts = 2
+	runner := NewSSH(cfg, 0)
+	t.Cleanup(func() { _ = runner.Close() })
+
+	if _, err := runner.Run(context.Background(), "true", nil); err == nil {
+		t.Fatal("expected an authentication error")
+	}
+	if got := front.count(); got != 2 {
+		t.Errorf("connected %d times, want 2", got)
+	}
+}
+
+func TestSSHDoesNotRetryPermanentFailures(t *testing.T) {
+	srv := startTestServer(t, "pw", nil)
+	_, otherPriv, _ := ed25519.GenerateKey(rand.Reader)
+	otherSigner, _ := ssh.NewSignerFromKey(otherPriv)
+
+	tests := []struct {
+		name  string
+		edit  func(*SSHConfig)
+		count int
+	}{
+		{name: "wrong host key", count: 1, edit: func(c *SSHConfig) {
+			c.InsecureIgnoreHostKey = false
+			c.HostKey = string(ssh.MarshalAuthorizedKey(otherSigner.PublicKey()))
+		}},
+		{name: "invalid private key", count: 0, edit: func(c *SSHConfig) {
+			c.PrivateKey = "not a key"
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			front := startFlakyFront(t, srv.addr, 0)
+			cfg := front.config(t)
+			cfg.ConnectMaxAttempts = 5
+			tt.edit(&cfg)
+			runner := NewSSH(cfg, 0)
+			t.Cleanup(func() { _ = runner.Close() })
+
+			if _, err := runner.Run(context.Background(), "true", nil); err == nil {
+				t.Fatal("expected an error")
+			}
+			if got := front.count(); got != tt.count {
+				t.Errorf("connected %d times, want %d", got, tt.count)
+			}
+		})
+	}
+}
+
+func TestSSHCancelWhileWaiting(t *testing.T) {
+	srv := startTestServer(t, "pw", nil)
+	front := startFlakyFront(t, srv.addr, 1000)
+	cfg := front.config(t)
+	cfg.ConnectMaxAttempts = 5
+	cfg.ConnectRetryInterval = time.Hour
+	runner := NewSSH(cfg, 0)
+	t.Cleanup(func() { _ = runner.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := runner.Run(ctx, "true", nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected a deadline error, got %v", err)
+	}
+}

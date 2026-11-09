@@ -1,3 +1,9 @@
+## 1.1.0 (Unreleased)
+
+ENHANCEMENTS:
+
+* **Provider:** wait for a host that is still booting: failed SSH connections are retried, up to `ssh.connect_max_attempts` times (`5` by default) every `ssh.connect_retry_interval` (`10s` by default).
+
 ## 0.1.0 (Unreleased)
 
 FEATURES:

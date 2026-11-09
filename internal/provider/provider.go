@@ -79,6 +79,9 @@ type sshModel struct {
 	Timeout        types.String `tfsdk:"timeout"`
 	MaxSessions    types.Int64  `tfsdk:"max_sessions"`
 	Bastion        types.Object `tfsdk:"bastion"`
+
+	ConnectMaxAttempts   types.Int64  `tfsdk:"connect_max_attempts"`
+	ConnectRetryInterval types.String `tfsdk:"connect_retry_interval"`
 }
 
 func (p *linuxProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -95,6 +98,16 @@ func (p *linuxProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp
 	sshAttributes["timeout"] = schema.StringAttribute{
 		Optional:            true,
 		MarkdownDescription: "Maximum time to establish the connection, as a Go duration such as `30s` or `1m`. Defaults to `30s`.",
+		Validators:          []validator.String{durationValidator{}},
+	}
+	sshAttributes["connect_max_attempts"] = schema.Int64Attribute{
+		Optional:            true,
+		MarkdownDescription: fmt.Sprintf("How many times to try to connect before giving up, to wait for a host that has just been started. Each attempt lasts at most `timeout`. Set it to `1` not to wait. Defaults to `%d`.", transport.DefaultConnectMaxAttempts),
+		Validators:          []validator.Int64{int64validator.AtLeast(1)},
+	}
+	sshAttributes["connect_retry_interval"] = schema.StringAttribute{
+		Optional:            true,
+		MarkdownDescription: fmt.Sprintf("Pause between two connection attempts, as a Go duration such as `5s` or `1m`. Defaults to `%s`.", transport.DefaultConnectRetryInterval),
 		Validators:          []validator.String{durationValidator{}},
 	}
 	sshAttributes["max_sessions"] = schema.Int64Attribute{
@@ -307,6 +320,14 @@ func (m *sshModel) config(ctx context.Context) (transport.SSHConfig, int, error)
 	if timeout := m.Timeout.ValueString(); timeout != "" {
 		// Validated by the schema.
 		cfg.Timeout, _ = time.ParseDuration(timeout)
+	}
+	cfg.ConnectMaxAttempts = transport.DefaultConnectMaxAttempts
+	if !m.ConnectMaxAttempts.IsNull() {
+		cfg.ConnectMaxAttempts = int(m.ConnectMaxAttempts.ValueInt64())
+	}
+	if interval := m.ConnectRetryInterval.ValueString(); interval != "" {
+		// Validated by the schema.
+		cfg.ConnectRetryInterval, _ = time.ParseDuration(interval)
 	}
 	maxSessions := transport.DefaultMaxSessions
 	if !m.MaxSessions.IsNull() {

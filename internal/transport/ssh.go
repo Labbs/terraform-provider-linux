@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -27,6 +28,12 @@ const (
 	// DefaultMaxSessions stays below the OpenSSH MaxSessions default (10)
 	// so that Terraform's parallelism never exhausts the server's limit.
 	DefaultMaxSessions = 5
+	// DefaultConnectMaxAttempts is how many times the provider tries to
+	// connect when not configured otherwise.
+	DefaultConnectMaxAttempts = 5
+	// DefaultConnectRetryInterval is the pause between two connection
+	// attempts when none is configured.
+	DefaultConnectRetryInterval = 10 * time.Second
 
 	keepaliveInterval = 30 * time.Second
 )
@@ -51,6 +58,13 @@ type SSHConfig struct {
 
 	Timeout time.Duration
 
+	// ConnectMaxAttempts is how many times establishing the connection is
+	// tried before giving up, to wait for a host that is still booting.
+	// Values below 2 mean a single attempt.
+	ConnectMaxAttempts int
+	// ConnectRetryInterval is the pause between two attempts.
+	ConnectRetryInterval time.Duration
+
 	// Bastion, when set, is the jump host used to reach Host.
 	Bastion *SSHConfig
 }
@@ -70,6 +84,19 @@ func (c *SSHConfig) timeout() time.Duration {
 	return c.Timeout
 }
 
+func (c *SSHConfig) connectRetryInterval() time.Duration {
+	if c.ConnectRetryInterval <= 0 {
+		return DefaultConnectRetryInterval
+	}
+	return c.ConnectRetryInterval
+}
+
+// permanentError marks a connection failure that trying again cannot fix.
+type permanentError struct{ err error }
+
+func (e *permanentError) Error() string { return e.err.Error() }
+func (e *permanentError) Unwrap() error { return e.err }
+
 // SSH runs scripts on a remote host. Every script gets its own session on a
 // single shared connection, which is opened on first use and re-established
 // if it breaks.
@@ -79,6 +106,10 @@ type SSH struct {
 
 	mu   sync.Mutex
 	conn *sshConn
+	// giveUpErr is set once every connection attempt has failed. Later
+	// scripts fail right away instead of each waiting for the host again,
+	// one after the other.
+	giveUpErr error
 }
 
 // NewSSH returns a Runner for the host described by cfg, running at most
@@ -186,13 +217,51 @@ func (s *SSH) connection(ctx context.Context) (*sshConn, error) {
 	if s.conn != nil {
 		return s.conn, nil
 	}
-	conn, err := dial(ctx, &s.cfg)
+	if s.giveUpErr != nil {
+		return nil, fmt.Errorf("%s: %w", s, s.giveUpErr)
+	}
+	conn, err := s.dialWithRetries(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", s, err)
 	}
 	s.conn = conn
 	go s.keepalive(conn)
 	return conn, nil
+}
+
+// dialWithRetries connects to the host, trying again until it answers or
+// the configured number of attempts is reached. Authentication failures are
+// retried too: a new instance often runs sshd before cloud-init has
+// installed its keys.
+func (s *SSH) dialWithRetries(ctx context.Context) (*sshConn, error) {
+	maxAttempts := s.cfg.ConnectMaxAttempts
+	for attempt := 1; ; attempt++ {
+		conn, err := dial(ctx, &s.cfg)
+		if err == nil {
+			return conn, nil
+		}
+		var permanent *permanentError
+		if maxAttempts < 2 || ctx.Err() != nil || errors.As(err, &permanent) {
+			return nil, err
+		}
+		if attempt >= maxAttempts {
+			s.giveUpErr = fmt.Errorf("giving up after %d connection attempts: %w", attempt, err)
+			return nil, s.giveUpErr
+		}
+
+		interval := s.cfg.connectRetryInterval()
+		tflog.Info(ctx, "host not ready, retrying the connection", map[string]any{
+			"target": s.String(), "attempt": attempt, "max_attempts": maxAttempts,
+			"retry_in": interval.String(), "error": err.Error(),
+		})
+		timer := time.NewTimer(interval)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		}
+	}
 }
 
 // drop forgets conn, if it is still the current connection, and closes it.
@@ -258,7 +327,7 @@ func dial(ctx context.Context, cfg *SSHConfig) (_ *sshConn, err error) {
 		closers = append(closers, agentConn)
 	}
 	if err != nil {
-		return nil, err
+		return nil, &permanentError{err}
 	}
 
 	addr := cfg.address()
@@ -315,9 +384,14 @@ func (c *SSHConfig) clientConfig() (*ssh.ClientConfig, io.Closer, error) {
 		return nil, agentConn, err
 	}
 	return &ssh.ClientConfig{
-		User:              c.User,
-		Auth:              auth,
-		HostKeyCallback:   hostKeyCallback,
+		User: c.User,
+		Auth: auth,
+		HostKeyCallback: func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+			if err := hostKeyCallback(hostname, remote, key); err != nil {
+				return &permanentError{err}
+			}
+			return nil
+		},
 		HostKeyAlgorithms: algorithms,
 		Timeout:           c.timeout(),
 	}, agentConn, nil
