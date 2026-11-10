@@ -85,6 +85,8 @@ jobs:
           LINUX_MODE: local
           LINUX_SUDO: "true"
           LINUX_ACC_SYSTEMD: "1"
+          # Loop devices, partitions and mounts: the runner is throwaway.
+          LINUX_ACC_DISK: "1"
         run: go test -v -cover ./internal/provider/
         timeout-minutes: 10
 

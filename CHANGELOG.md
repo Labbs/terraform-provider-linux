@@ -1,3 +1,12 @@
+## 1.3.0 (Unreleased)
+
+FEATURES:
+
+* **New Resource:** `linux_partition`
+* **New Resource:** `linux_filesystem`
+* **New Resource:** `linux_mount`
+* **New Data Source:** `linux_block_devices`
+
 ## 1.2.0
 
 FEATURES:

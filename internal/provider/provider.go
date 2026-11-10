@@ -406,9 +406,12 @@ func (p *linuxProvider) Resources(context.Context) []func() resource.Resource {
 		NewFileBlockResource,
 		NewFileLineResource,
 		NewFileResource,
+		NewFilesystemResource,
 		NewGroupResource,
 		NewHostnameResource,
+		NewMountResource,
 		NewPackageResource,
+		NewPartitionResource,
 		NewPatchResource,
 		NewSedResource,
 		NewSSHAuthorizedKeyResource,
@@ -421,6 +424,7 @@ func (p *linuxProvider) Resources(context.Context) []func() resource.Resource {
 
 func (p *linuxProvider) DataSources(context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
+		NewBlockDevicesDataSource,
 		NewCommandDataSource,
 		NewFileDataSource,
 		NewGroupDataSource,
