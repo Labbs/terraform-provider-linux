@@ -98,7 +98,7 @@ func TestProviderSchemas(t *testing.T) {
 
 	want := map[string][]string{
 		"resources": {
-			"linux_command", "linux_cron_job", "linux_directory", "linux_file", "linux_file_block", "linux_file_line",
+			"linux_archive_extract", "linux_command", "linux_cron_job", "linux_directory", "linux_download", "linux_file", "linux_file_block", "linux_file_line",
 			"linux_group", "linux_hostname", "linux_package", "linux_patch", "linux_sed", "linux_ssh_authorized_key",
 			"linux_symlink", "linux_sysctl", "linux_systemd_unit", "linux_user",
 		},

@@ -1,4 +1,11 @@
-## 1.1.0 (Unreleased)
+## 1.2.0
+
+FEATURES:
+
+* **New Resource:** `linux_download`
+* **New Resource:** `linux_archive_extract`
+
+## 1.1.0
 
 ENHANCEMENTS:
 
