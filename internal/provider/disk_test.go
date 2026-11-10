@@ -49,6 +49,12 @@ func testLoopDevice(t *testing.T, dir string, size int) string {
 	return dev
 }
 
+// errorPattern matches message in an error that Terraform may have wrapped
+// over several lines.
+func errorPattern(message string) *regexp.Regexp {
+	return regexp.MustCompile(strings.ReplaceAll(regexp.QuoteMeta(message), " ", `\s+`))
+}
+
 func checkRemoteScript(t *testing.T, script, want string) resource.TestCheckFunc {
 	return func(*terraform.State) error {
 		res, err := testClient(t).Run(context.Background(), script, nil)
@@ -217,7 +223,7 @@ resource "linux_partition" "test" {
   number = 1
 }
 `, dev),
-				ExpectError: regexp.MustCompile(`refusing to partition it`),
+				ExpectError: errorPattern(`refusing to partition it`),
 			},
 			{
 				// Another file system type is refused.
@@ -227,7 +233,7 @@ resource "linux_filesystem" "test" {
   type   = "swap"
 }
 `, dev),
-				ExpectError: regexp.MustCompile(`already holds a ext4 file system labelled "before"`),
+				ExpectError: errorPattern(`already holds a ext4 file system labelled "before"`),
 			},
 			{
 				// The same type is used as it is, and only relabelled.
@@ -373,7 +379,7 @@ data "linux_block_devices" "all" {
   wait_timeout   = "1s"
 }
 `,
-				ExpectError: regexp.MustCompile(`expected at least 1000`),
+				ExpectError: errorPattern(`expected at least 1000`),
 			},
 		},
 	})
