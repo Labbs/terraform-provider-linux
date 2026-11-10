@@ -15,6 +15,9 @@ Everything runs through `/bin/sh` with standard tools, so the managed host needs
 | Resource | `linux_file_block` | A block of lines between markers. | `blockinfile` / `file.blockreplace` |
 | Resource | `linux_download` | Download a file from a URL to the host, checking its SHA-256 digest. | `get_url` / `file.managed` with `source` |
 | Resource | `linux_archive_extract` | Extract a tar (gzip, bzip2, xz), zip or gz archive on the host, with `strip_components`. Removes the extracted files on destroy. | `unarchive` / `archive.extracted` |
+| Resource | `linux_partition` | A GPT partition, created on an empty disk or kept as it is, grown with the disk. Never shrunk or deleted. | `parted` / `disk_setup` (cloud-init) |
+| Resource | `linux_filesystem` | Format a device, only if it is empty: an existing file system of the same type is kept with its data. Grow it with its device. | `filesystem` / `fs_setup` (cloud-init) |
+| Resource | `linux_mount` | Mount a file system or enable swap, and record it in `/etc/fstab`. | `mount` / `mount.mounted` |
 | Resource | `linux_patch` | Apply a unified diff, revert it on destroy. No `patch` binary needed on the host. | `patch` / `file.patch` |
 | Resource | `linux_sed` | Edit a file in place with `sed` expressions. | `replace` / `file.replace` |
 | Resource | `linux_package` | Install a package with apt, dnf, yum, zypper, apk or pacman. | `package` / `pkg.installed` |
@@ -28,6 +31,7 @@ Everything runs through `/bin/sh` with standard tools, so the managed host needs
 | Data source | `linux_stat` | Whether a path exists, and its type, mode and owner. | `stat` / `file.exists` |
 | Data source | `linux_file` | Content of a file. | `slurp` |
 | Data source | `linux_sed` | Whether `sed` expressions would change a file. | `replace` in check mode |
+| Data source | `linux_block_devices` | Disks and partitions, with sizes, serials, UUIDs and mount points; waits for attached volumes. | `lsblk` |
 | Data source | `linux_host` | OS, kernel, architecture, CPUs, memory, package manager. | `setup` / grains |
 | Data source | `linux_package`, `linux_user`, `linux_group` | Whether a package, user or group exists, and its details. | `package_facts`, `getent` |
 | Data source | `linux_systemd_unit` | State of a unit. | `service_facts` |
