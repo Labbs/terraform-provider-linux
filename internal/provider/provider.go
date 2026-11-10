@@ -398,9 +398,11 @@ func (m *endpointModel) endpoint(envPrefix string) (transport.SSHConfig, error) 
 
 func (p *linuxProvider) Resources(context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
+		NewArchiveExtractResource,
 		NewCommandResource,
 		NewCronJobResource,
 		NewDirectoryResource,
+		NewDownloadResource,
 		NewFileBlockResource,
 		NewFileLineResource,
 		NewFileResource,
